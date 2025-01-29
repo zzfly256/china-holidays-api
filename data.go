@@ -3,89 +3,68 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"sync"
+	"io"
+	"net/http"
+	"strings"
 	"time"
 
-	ical "github.com/arran4/golang-ical"
+	ics "github.com/arran4/golang-ical"
 )
 
-type Event struct {
-	Name      string `json:"name"`
-	StartDate string `json:"start_date"`
-	EndDate   string `json:"end_date"`
-	Remark    string `json:"remark"`
-}
-
-var (
-	mu             sync.RWMutex
-	data           []Event
-	lastUpdateTime string
-
-	JieQi = map[string]bool{
-		"立春": true,
-		"雨水": true,
-		"惊蛰": true,
-		"春分": true,
-		"清明": true,
-		"谷雨": true,
-		"立夏": true,
-		"小满": true,
-		"芒种": true,
-		"夏至": true,
-		"小暑": true,
-		"大暑": true,
-		"立秋": true,
-		"处暑": true,
-		"白露": true,
-		"秋分": true,
-		"寒露": true,
-		"霜降": true,
-		"立冬": true,
-		"小雪": true,
-		"大雪": true,
-		"冬至": true,
-		"小寒": true,
-		"大寒": true,
-	}
+const (
+	// iCloud 假日日历地址
+	calendarURL = "https://calendars.icloud.com/holidays/cn_zh.ics"
+	// 请求超时时间
+	requestTimeout = 10 * time.Second
 )
 
-// updateData 更新数据
-func updateData(ctx context.Context) {
-	mu.Lock()
-	defer mu.Unlock()
+// updateData 从 iCloud 更新节假日数据
+func updateData(ctx context.Context) error {
+	// 创建带超时的 context
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 
-	st := time.Now()
-	eventList, err := parseCalendar(ctx, "https://calendars.icloud.com/holidays/cn_zh.ics/")
+	// 创建 HTTP 请求
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, calendarURL, nil)
 	if err != nil {
-		log.Println("更新数据出错:", err.Error())
-		return
+		return fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	data = eventList
-	duration := time.Since(st)
-	log.Println("更新数据成功，耗时:", duration.String())
-	lastUpdateTime = time.Now().Format(time.DateTime)
-	return
-}
-
-// parseCalendar 解析日历数据
-func parseCalendar(ctx context.Context, icsUrl string) (result []Event, err error) {
-	cal, err := ical.ParseCalendarFromUrl(icsUrl, ctx)
+	// 发送请求
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get data from remote error: %w", err)
+		return fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("请求返回非200状态码: %d", resp.StatusCode)
 	}
 
-	for _, event := range cal.Events() {
+	// 读取响应内容
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	// 解析 ICS 文件
+	calendar, err := ics.ParseCalendar(strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("解析日历数据失败: %w", err)
+	}
+
+	// 转换数据
+	var events []Event
+	for _, event := range calendar.Events() {
 		item := Event{}
 		for _, property := range event.Properties {
-			if property.BaseProperty.IANAToken == "SUMMARY" {
+			if property.IANAToken == string(ics.PropertySummary) {
 				item.Name = property.Value
 			}
-			if property.BaseProperty.IANAToken == "DTSTART" {
+			if property.IANAToken == string(ics.PropertyDtstart) {
 				item.StartDate = property.Value
 			}
-			if property.BaseProperty.IANAToken == "DTEND" {
+			if property.IANAToken == string(ics.PropertyDtend) {
 				item.EndDate = property.Value
 			}
 			if property.BaseProperty.IANAToken == "X-APPLE-SPECIAL-DAY" {
@@ -99,8 +78,14 @@ func parseCalendar(ctx context.Context, icsUrl string) (result []Event, err erro
 				}
 			}
 		}
-		result = append(result, item)
+		events = append(events, item)
 	}
 
-	return
+	// 使用互斥锁保护数据更新
+	mu.Lock()
+	data = events
+	lastUpdateTime = time.Now().Format("2006-01-02 15:04:05")
+	mu.Unlock()
+
+	return nil
 }

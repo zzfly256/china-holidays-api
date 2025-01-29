@@ -11,6 +11,7 @@
 - 支持查询法定节假日及调休安排
 - 支持查询二十四节气
 - 支持按年份筛选（支持近三年数据）
+- RESTful API 设计
 - 自动更新数据
 - 轻量级，易部署
 
@@ -19,7 +20,7 @@
 ### 1. 健康检查
 
 ```
-GET /health
+GET /api/v1/health
 ```
 
 响应示例：
@@ -33,7 +34,7 @@ GET /health
 ### 2. 获取节假日信息
 
 ```
-GET /get_holidays
+GET /api/v1/holidays
 ```
 
 查询参数：
@@ -96,3 +97,7 @@ docker run -p 8080:8080 china-holidays-api
 ## 开源协议
 
 本项目采用 MIT 协议开源，详见 [LICENSE](LICENSE) 文件。
+
+## 数据源
+
+- iCloud: https://calendars.icloud.com/holidays/cn_zh.ics
